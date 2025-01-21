@@ -145,22 +145,24 @@ def generate_rank_order(
 
 def run_matching_round(
     applicant_preferences: Dict[str, List[str]],
-    program_preferences: Dict[str, Dict[str, List[str]]],
+    program_preferences: Dict[str, Dict],
     program_capacities: Dict[str, int],
     weights: ScoreWeights
 ) -> MatchResult:
     """Run matching algorithm with configurable randomness."""
+    # Initialize matches dictionary and other trackers
     matches = {prog: [] for prog in program_capacities.keys()}
     unmatched = set(applicant_preferences.keys())
     next_choices = {app: 0 for app in applicant_preferences.keys()}
     
+    # Run matching algorithm
     while unmatched:
         applicant = unmatched.pop()
         rank_list = applicant_preferences[applicant]
         
         if next_choices[applicant] >= len(rank_list):
             continue
-        
+            
         program = rank_list[next_choices[applicant]]
         next_choices[applicant] += 1
         
@@ -170,24 +172,24 @@ def run_matching_round(
             current_matches = matches[program]
             ranked_applicants = program_preferences[program]
             
-            rankings = {
-                app: ranked_applicants.index(app)
-                if app in ranked_applicants else float('inf')
-                for app in current_matches + [applicant]
-            }
+            # Calculate rankings with reduced randomness for higher ranks
+            rankings = {}
+            for app in current_matches + [applicant]:
+                if app in ranked_applicants:
+                    rank_pos = ranked_applicants.index(app)
+                    random_factor = weights.match_random_factor
+                    if rank_pos < len(ranked_applicants) // 4:  # Top 25% of ranks
+                        random_factor *= 0.5
+                    rankings[app] = rank_pos + random.uniform(
+                        -random_factor, random_factor
+                    ) * min(5, rank_pos + 1)
+                else:
+                    rankings[app] = float('inf')
             
-            # Add reduced random variation for highly ranked applicants
-            sorted_applicants = sorted(
-                rankings.keys(),
-                key=lambda x: (
-                    rankings[x] + 
-                    random.uniform(
-                        -weights.match_random_factor,
-                        weights.match_random_factor
-                    ) * min(5, rankings[x])  # Scale randomness by rank position
-                )
-            )
+            # Sort by adjusted rankings
+            sorted_applicants = sorted(rankings.keys(), key=lambda x: rankings[x])
             
+            # Accept top candidates up to capacity
             capacity = program_capacities[program]
             accepted = sorted_applicants[:capacity]
             
@@ -198,6 +200,19 @@ def run_matching_round(
             else:
                 unmatched.add(applicant)
     
+    # Create applicant->program matches dictionary
+    applicant_matches = {}
+    for prog, matched_apps in matches.items():
+        for app in matched_apps:
+            applicant_matches[app] = prog
+    
+    # Calculate unfilled positions
+    unfilled = {
+        prog: capacity - len(matches[prog])
+        for prog, capacity in program_capacities.items()
+    }
+    
+    # Return match result
     return MatchResult(
         applicant_matches=applicant_matches,
         program_matches=matches,
