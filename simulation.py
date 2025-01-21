@@ -6,9 +6,10 @@ from matcher import calculate_applicant_score, generate_rank_order, run_matching
 def generate_other_applicants(
     programs: Dict[str, Program],
     specialties: Dict[str, Specialty],
+    weights: ScoreWeights,
     n_per_specialty: int = None
 ) -> Dict[str, Applicant]:
-    """Generate simulated competing applicants."""
+    """Generate simulated competing applicants with configurable weights."""
     other_applicants = {}
     averages = ExamScores.get_national_averages()
     
@@ -45,21 +46,30 @@ def generate_other_applicants(
             research_prob = (specialty.competitiveness_factor + specialty.research_emphasis) / 2
             n_publications = np.random.poisson(research_prob * 3)
             
+            # Interview and letter scores with some randomness
+            interview_score = np.random.beta(2, 2)
+            letter_scores = np.random.beta(2, 2)
+            
+            # Generate applicant characteristics based on weights
+            research_focus = (n_publications >= 2)
+            away_rotation = np.random.random() < (weights.away_rotation_bonus * 2)
+            alumni_connection = np.random.random() < (weights.alumni_bonus * 2)
+            
             # Generate applicant
             applicant = Applicant(
                 name=f"applicant_{specialty_name}_{i}",
                 rank_list=[],  # Will be filled later
-                interview_score=np.random.beta(2, 2),  # Beta distribution for scores
+                interview_score=interview_score,
                 exam_scores=ExamScores(
                     step2_ck=step2_score,
                     comlex2=comlex2_score
                 ),
-                letter_scores=np.random.beta(2, 2),
+                letter_scores=letter_scores,
                 publications=n_publications,
                 is_do=is_do,
-                research_focus=(n_publications >= 2),
-                away_rotation=np.random.random() < 0.2,
-                alumni_connection=np.random.random() < 0.1
+                research_focus=research_focus,
+                away_rotation=away_rotation,
+                alumni_connection=alumni_connection
             )
             
             other_applicants[f"applicant_{specialty_name}_{i}"] = applicant
@@ -69,9 +79,10 @@ def generate_other_applicants(
 def generate_applicant_preferences(
     applicants: Dict[str, Applicant],
     programs: Dict[str, Program],
-    specialties: Dict[str, Specialty]
+    specialties: Dict[str, Specialty],
+    weights: ScoreWeights
 ) -> Dict[str, List[str]]:
-    """Generate preference lists for simulated applicants."""
+    """Generate preference lists for simulated applicants using configurable weights."""
     preferences = {}
     
     for app_id, applicant in applicants.items():
@@ -89,24 +100,33 @@ def generate_applicant_preferences(
             if applicant.is_do and not program.is_do_friendly:
                 continue
                 
-            # Calculate base desirability
+            # Calculate base desirability using weights
             score = 0.0
             
-            # Program tier is important (1 is best, 3 is worst)
-            score += (4 - program.program_tier) * 0.3  # Fixed: program_tier instead of tier
+            # Program tier is important
+            tier_factors = {
+                1: weights.tier_1_factor,
+                2: weights.tier_2_factor,
+                3: weights.tier_3_factor
+            }
+            score += tier_factors[program.program_tier] * 0.4
             
-            # Research alignment matters
+            # Research alignment matters more for research-focused programs
             if applicant.research_focus and program.research_focus:
-                score += 0.2
-                
-            # Away rotation and alumni connections matter
+                score += weights.research_alignment_bonus
+            
+            # Away rotation and alumni connections
             if applicant.away_rotation:
-                score += 0.15
+                score += weights.away_rotation_bonus
             if applicant.alumni_connection:
-                score += 0.1
-                
-            # Add some randomness
-            score += np.random.normal(0, 0.1)
+                score += weights.alumni_bonus
+            
+            # Add geographic preference if applicable
+            if program.geographic_preference:
+                score += weights.geographic_bonus
+            
+            # Add random variation
+            score += np.random.normal(0, weights.rank_random_factor)
             
             scores.append((prog_name, score))
         
@@ -123,10 +143,11 @@ def simulate_match(
     our_applicant: Applicant,
     programs: Dict[str, Program],
     specialties: Dict[str, Specialty],
+    weights: ScoreWeights,
     n_simulations: int = 1000,
     progress_callback = None
 ) -> Tuple[Dict[str, float], Dict[str, Dict]]:
-    """Run multiple match simulations to calculate probabilities."""
+    """Run multiple match simulations with configurable weights."""
     match_counts = {prog: 0 for prog in programs}
     match_counts['No Match'] = 0
     
@@ -141,26 +162,39 @@ def simulate_match(
         if progress_callback:
             progress_callback(i + 1, n_simulations)
         
-        # Generate other applicants
-        other_applicants = generate_other_applicants(programs, specialties)
+        # Generate other applicants with weights
+        other_applicants = generate_other_applicants(
+            programs,
+            specialties,
+            weights
+        )
         all_applicants = {'our_applicant': our_applicant, **other_applicants}
         
-        # Generate preferences
+        # Generate preferences with weights
         applicant_prefs = generate_applicant_preferences(
-            all_applicants, programs, specialties
+            all_applicants,
+            programs,
+            specialties,
+            weights
         )
         
-        # Generate program preferences
+        # Generate program preferences with weights
         program_prefs = {
-            prog_name: generate_rank_order(all_applicants, program, specialties[program.specialty])
+            prog_name: generate_rank_order(
+                all_applicants,
+                program,
+                specialties[program.specialty],
+                weights
+            )
             for prog_name, program in programs.items()
         }
         
-        # Run the match
+        # Run the match with weights
         result = run_matching_round(
             applicant_prefs,
             program_prefs,
-            {p.name: p.spots_available for p in programs.values()}
+            {p.name: p.spots_available for p in programs.values()},
+            weights
         )
         
         # Record results
@@ -171,8 +205,13 @@ def simulate_match(
             program = programs[matched_program]
             specialty = specialties[program.specialty]
             
-            # Record score and rank
-            score = calculate_applicant_score(our_applicant, program, specialty)
+            # Record score and rank using weighted calculation
+            score = calculate_applicant_score(
+                our_applicant,
+                program,
+                specialty,
+                weights
+            )
             rank = our_applicant.rank_list.index(matched_program) + 1
             
             detailed_stats[matched_program]['scores'].append(score)
@@ -189,14 +228,22 @@ def simulate_match(
         scores = detailed_stats[prog]['scores']
         ranks = detailed_stats[prog]['ranks']
         if scores:
-            detailed_stats[prog]['avg_score'] = np.mean(scores)
-            detailed_stats[prog]['avg_rank'] = np.mean(ranks)
-            detailed_stats[prog]['std_score'] = np.std(scores)
-            detailed_stats[prog]['std_rank'] = np.std(ranks)
+            detailed_stats[prog].update({
+                'avg_score': np.mean(scores),
+                'std_score': np.std(scores) if len(scores) > 1 else 0,
+                'avg_rank': np.mean(ranks),
+                'std_rank': np.std(ranks) if len(ranks) > 1 else 0,
+                'n_matches': len(scores),
+                'match_rate': len(scores) / n_simulations
+            })
         else:
-            detailed_stats[prog]['avg_score'] = 0
-            detailed_stats[prog]['avg_rank'] = 0
-            detailed_stats[prog]['std_score'] = 0
-            detailed_stats[prog]['std_rank'] = 0
+            detailed_stats[prog].update({
+                'avg_score': 0,
+                'std_score': 0,
+                'avg_rank': 0,
+                'std_rank': 0,
+                'n_matches': 0,
+                'match_rate': 0
+            })
     
     return probabilities, detailed_stats

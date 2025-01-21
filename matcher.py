@@ -3,62 +3,61 @@ import random
 from models import Applicant, Program, Specialty, MatchResult
 
 def calculate_applicant_score(
-    applicant: Applicant, 
-    program: Program, 
-    specialty: Specialty, 
-    random_factor: float = 0.2
+    applicant: Applicant,
+    program: Program,
+    specialty: Specialty,
+    weights: ScoreWeights
 ) -> float:
-    """
-    Calculate program's preference score for an applicant with added randomness.
-    
-    :param applicant: Applicant being scored
-    :param program: Program considering the applicant
-    :param specialty: Specialty of the program
-    :param random_factor: Percentage of score that can be randomly adjusted
-    :return: Final score for the applicant
-    """
-    # Get normalized exam scores
-    normalized_scores = applicant.exam_scores.normalize_scores()
-    
+    """Calculate program's preference score for an applicant using configurable weights."""
     # Check DO status compatibility
     if applicant.is_do and not program.is_do_friendly:
         return 0.0
     
+    # Get normalized exam scores
+    normalized_scores = applicant.exam_scores.normalize_scores()
+    
     # Base score components
     score_components = {
-        'interview': applicant.interview_score * 0.30,  # Interview is key
-        'letters': applicant.letter_scores * 0.15,
+        'interview': applicant.interview_score * weights.interview_weight,
+        'letters': applicant.letter_scores * weights.letters_weight,
     }
     
-    # Add exam scores
+    # Add exam scores with configurable weights
     if 'step2_ck' in normalized_scores:
-        score_components['step2'] = normalized_scores['step2_ck'] * 0.25
+        score_components['step2'] = normalized_scores['step2_ck'] * weights.step2_weight
     if 'comlex2' in normalized_scores:
-        score_components['comlex2'] = normalized_scores['comlex2'] * 0.25
+        score_components['comlex2'] = normalized_scores['comlex2'] * weights.comlex2_weight
     
-    # Research impact - more important for research focused programs
-    research_weight = 0.20 if program.research_focus else 0.10
+    # Research impact with configurable weight
     research_score = min(1.0, applicant.publications / 5)  # Cap at 5 publications
-    score_components['research'] = research_score * research_weight
+    score_components['research'] = research_score * weights.research_weight
     
-    # Program fit bonuses
+    # Program fit bonuses with configurable weights
     if program.research_focus and applicant.research_focus:
-        score_components['research_alignment'] = 0.10
+        score_components['research_alignment'] = weights.research_alignment_bonus
     if applicant.away_rotation:
-        score_components['away_rotation'] = 0.15
+        score_components['away_rotation'] = weights.away_rotation_bonus
     if applicant.alumni_connection:
-        score_components['alumni'] = 0.05
-        
+        score_components['alumni'] = weights.alumni_bonus
+    if program.geographic_preference:
+        score_components['geographic'] = weights.geographic_bonus
+    
     # Calculate base final score
     base_final_score = sum(score_components.values())
     
-    # Apply program tier adjustment
-    tier_factor = {1: 1.0, 2: 0.9, 3: 0.8}[program.program_tier]
-    base_final_score *= tier_factor
+    # Apply configurable program tier adjustment
+    tier_factors = {
+        1: weights.tier_1_factor,
+        2: weights.tier_2_factor,
+        3: weights.tier_3_factor
+    }
+    base_final_score *= tier_factors[program.program_tier]
     
-    # Add random variance
-    # Random factor creates +/- variation up to the specified percentage of the base score
-    random_variance = random.uniform(-random_factor, random_factor) * base_final_score
+    # Add configurable random variance
+    random_variance = random.uniform(
+        -weights.score_random_factor,
+        weights.score_random_factor
+    ) * base_final_score
     final_score = base_final_score + random_variance
     
     # Ensure final score remains between 0 and 1
@@ -68,86 +67,83 @@ def generate_rank_order(
     applicants: Dict[str, Applicant],
     program: Program,
     specialty: Specialty,
-    random_factor: float = 0.2
+    weights: ScoreWeights
 ) -> List[str]:
-    """Generate a program's rank order list of applicants with added randomness."""
-    # Calculate scores for all applicants
+    """Generate program's rank order list with configurable weights and randomness."""
     scores = []
     for app_id, applicant in applicants.items():
         score = calculate_applicant_score(
-            applicant, 
-            program, 
-            specialty, 
-            random_factor=random_factor
+            applicant,
+            program,
+            specialty,
+            weights
         )
         scores.append((app_id, score))
     
-    # Sort by score, highest to lowest, and filter out zero scores
-    ranked_applicants = [
-        app_id for app_id, score in 
-        sorted(scores, key=lambda x: x[1], reverse=True)
-        if score > 0
-    ]
+    # Sort by score with configurable random factor
+    ranked_applicants = []
+    for app_id, score in scores:
+        if score > 0:  # Skip zero scores
+            random_adj = random.uniform(
+                -weights.rank_random_factor,
+                weights.rank_random_factor
+            ) * score
+            ranked_applicants.append((app_id, score + random_adj))
     
-    return ranked_applicants
+    return [
+        app_id for app_id, _ in
+        sorted(ranked_applicants, key=lambda x: x[1], reverse=True)
+    ]
 
 def run_matching_round(
     applicant_preferences: Dict[str, List[str]],
-    program_preferences: Dict[str, Dict[str, List[str]]],
+    program_preferences: Dict[str, List[str]],
     program_capacities: Dict[str, int],
-    random_factor: float = 0.2
+    weights: ScoreWeights
 ) -> MatchResult:
-    """Run one round of the matching algorithm with added randomness."""
-    # Initialize matches
+    """Run matching algorithm with configurable randomness."""
     matches = {prog: [] for prog in program_capacities.keys()}
     unmatched = set(applicant_preferences.keys())
-    
-    # Track how far each applicant has gone down their rank list
     next_choices = {app: 0 for app in applicant_preferences.keys()}
-    
-    # Set random seed for reproducibility if needed
-    random.seed()
     
     while unmatched:
         applicant = unmatched.pop()
         rank_list = applicant_preferences[applicant]
         
-        # If applicant has exhausted their rank list
         if next_choices[applicant] >= len(rank_list):
             continue
-            
-        # Get next program choice
+        
         program = rank_list[next_choices[applicant]]
         next_choices[applicant] += 1
         
-        # If program has space
         if len(matches[program]) < program_capacities[program]:
             matches[program].append(applicant)
         else:
-            # Compare with current matches
             current_matches = matches[program]
             ranked_applicants = program_preferences[program]
             
-            # Get rankings of current matches and new applicant
-            rankings = {app: ranked_applicants.index(app) 
-                       if app in ranked_applicants else float('inf') 
-                       for app in current_matches + [applicant]}
+            rankings = {
+                app: ranked_applicants.index(app)
+                if app in ranked_applicants else float('inf')
+                for app in current_matches + [applicant]
+            }
             
-            # Sort by ranking with some probabilistic variation
+            # Add configurable random variation to rankings
             sorted_applicants = sorted(
-                rankings.keys(), 
+                rankings.keys(),
                 key=lambda x: (
-                    rankings[x] + 
-                    random.uniform(-random_factor, random_factor) * len(ranked_applicants)
+                    rankings[x] +
+                    random.uniform(
+                        -weights.match_random_factor,
+                        weights.match_random_factor
+                    ) * len(ranked_applicants)
                 )
             )
             
-            # Take top applicants up to capacity
             capacity = program_capacities[program]
             accepted = sorted_applicants[:capacity]
             
             if applicant in accepted:
-                # Find who to remove
                 rejected = sorted_applicants[capacity]
                 matches[program] = accepted
                 unmatched.add(rejected)
@@ -159,8 +155,7 @@ def run_matching_round(
     for prog, matched_apps in matches.items():
         for app in matched_apps:
             applicant_matches[app] = prog
-    
-    # Calculate unfilled positions
+            
     unfilled = {
         prog: capacity - len(matches[prog])
         for prog, capacity in program_capacities.items()

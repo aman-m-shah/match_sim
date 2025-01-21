@@ -4,17 +4,69 @@ from typing import List, Dict, Optional
 @dataclass
 class ScoreWeights:
     """Weights for different components in applicant scoring."""
-    random_factor: float = 0.2
-    interview: float = 0.25
-    letters: float = 0.15
-    program_fit: float = 0.2
-    research: float = 0.15
-    geographic: float = 0.1
-    rotation: float = 0.1
-    alumni: float = 0.05
-    top_candidate: float = 0.15
-    step2_weight: float = 0.3
-    comlex2_weight: float = 0.3
+    # Exam score weights
+    step2_weight: float = 0.25
+    comlex2_weight: float = 0.25
+    
+    # Interview and letters weights
+    interview_weight: float = 0.30
+    letters_weight: float = 0.15
+    
+    # Research and program fit weights
+    research_weight: float = 0.15
+    research_alignment_bonus: float = 0.10
+    
+    # Program-specific bonuses
+    away_rotation_bonus: float = 0.15
+    alumni_bonus: float = 0.05
+    geographic_bonus: float = 0.10
+    
+    # Program tier adjustments
+    tier_1_factor: float = 1.0
+    tier_2_factor: float = 0.9
+    tier_3_factor: float = 0.8
+    
+    # Randomization factors
+    score_random_factor: float = 0.20  # For initial score calculation
+    rank_random_factor: float = 0.15   # For rank list generation
+    match_random_factor: float = 0.10  # For match algorithm
+
+    def validate(self) -> Tuple[bool, str]:
+        """Validate that weights are reasonable."""
+        # Check base weights sum to approximately 1
+        base_weights = (
+            self.step2_weight + 
+            self.comlex2_weight + 
+            self.interview_weight + 
+            self.letters_weight + 
+            self.research_weight
+        )
+        
+        if not 0.95 <= base_weights <= 1.05:
+            return False, f"Base weights sum to {base_weights:.2f}, should be close to 1.0"
+            
+        # Check bonus weights are reasonable
+        if any(w > 0.3 for w in [
+            self.research_alignment_bonus,
+            self.away_rotation_bonus,
+            self.alumni_bonus,
+            self.geographic_bonus
+        ]):
+            return False, "Bonus weights should not exceed 0.3"
+            
+        # Check tier factors are properly ordered
+        if not (self.tier_1_factor >= self.tier_2_factor >= self.tier_3_factor):
+            return False, "Tier factors must be ordered: tier_1 >= tier_2 >= tier_3"
+            
+        # Check randomization factors are reasonable
+        if any(w > 0.5 for w in [
+            self.score_random_factor,
+            self.rank_random_factor,
+            self.match_random_factor
+        ]):
+            return False, "Random factors should not exceed 0.5"
+            
+        return True, "Weights are valid"
 
 @dataclass
 class ExamScores:

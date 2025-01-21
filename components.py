@@ -11,22 +11,112 @@ def score_weights_sidebar():
     """Create sidebar interface for adjusting score weights."""
     st.sidebar.header("Scoring Weights")
     
-    with st.sidebar.expander("Adjust Score Components", expanded=False):
-        # Basic components
-        st.subheader("Basic Components")
-        weights = {
-            'interview': st.slider("Interview", 0.0, 0.5, 0.25, help="Weight of interview performance"),
-            'letters': st.slider("Letters", 0.0, 0.5, 0.15, help="Weight of letters"),
-            'step2': st.slider("STEP 2 CK", 0.0, 0.5, 0.3, help="Weight of STEP 2 CK score"),
-            'comlex2': st.slider("COMLEX 2", 0.0, 0.5, 0.3, help="Weight of COMLEX Level 2 score"),
-            'research': st.slider("Research", 0.0, 0.5, 0.15, help="Weight of research"),
-            'random': st.slider("Random Factor", 0.0, 0.2, 0.05, help="Random variation")
-        }
+    weights = ScoreWeights()
+    
+    with st.sidebar.expander("Base Score Weights", expanded=False):
+        # Core score components
+        weights.step2_weight = st.slider(
+            "STEP 2 CK Weight",
+            0.0, 0.5, 0.25,
+            help="Weight of STEP 2 CK score in base calculation"
+        )
+        weights.comlex2_weight = st.slider(
+            "COMLEX Level 2 Weight",
+            0.0, 0.5, 0.25,
+            help="Weight of COMLEX Level 2 score in base calculation"
+        )
+        weights.interview_weight = st.slider(
+            "Interview Weight",
+            0.0, 0.5, 0.30,
+            help="Weight of interview performance"
+        )
+        weights.letters_weight = st.slider(
+            "Letters Weight",
+            0.0, 0.5, 0.15,
+            help="Weight of letters of recommendation"
+        )
+        weights.research_weight = st.slider(
+            "Research Weight",
+            0.0, 0.5, 0.15,
+            help="Weight of research publications"
+        )
         
-        total_weight = sum(weights.values())
-        st.info(f"Total weight sum: {total_weight:.2f}")
-        return weights
-
+        base_sum = (
+            weights.step2_weight +
+            weights.comlex2_weight +
+            weights.interview_weight +
+            weights.letters_weight +
+            weights.research_weight
+        )
+        st.info(f"Base weights sum: {base_sum:.2f} (should be close to 1.0)")
+    
+    with st.sidebar.expander("Bonus Weights", expanded=False):
+        # Bonus factors
+        weights.research_alignment_bonus = st.slider(
+            "Research Alignment Bonus",
+            0.0, 0.3, 0.10,
+            help="Additional bonus for research alignment"
+        )
+        weights.away_rotation_bonus = st.slider(
+            "Away Rotation Bonus",
+            0.0, 0.3, 0.15,
+            help="Additional bonus for away rotation"
+        )
+        weights.alumni_bonus = st.slider(
+            "Alumni Connection Bonus",
+            0.0, 0.3, 0.05,
+            help="Additional bonus for alumni connection"
+        )
+        weights.geographic_bonus = st.slider(
+            "Geographic Preference Bonus",
+            0.0, 0.3, 0.10,
+            help="Additional bonus for geographic preference"
+        )
+    
+    with st.sidebar.expander("Program Tier Factors", expanded=False):
+        # Tier adjustment factors
+        weights.tier_1_factor = st.slider(
+            "Tier 1 Program Factor",
+            0.8, 1.0, 1.0,
+            help="Score multiplier for tier 1 programs"
+        )
+        weights.tier_2_factor = st.slider(
+            "Tier 2 Program Factor",
+            0.7, 0.95, 0.9,
+            help="Score multiplier for tier 2 programs"
+        )
+        weights.tier_3_factor = st.slider(
+            "Tier 3 Program Factor",
+            0.6, 0.9, 0.8,
+            help="Score multiplier for tier 3 programs"
+        )
+    
+    with st.sidebar.expander("Random Factors", expanded=False):
+        # Randomization factors
+        weights.score_random_factor = st.slider(
+            "Score Random Factor",
+            0.0, 0.5, 0.20,
+            help="Random variation in initial score calculation"
+        )
+        weights.rank_random_factor = st.slider(
+            "Rank List Random Factor",
+            0.0, 0.5, 0.15,
+            help="Random variation in rank list generation"
+        )
+        weights.match_random_factor = st.slider(
+            "Match Algorithm Random Factor",
+            0.0, 0.5, 0.10,
+            help="Random variation in match algorithm"
+        )
+    
+    # Validate weights
+    is_valid, message = weights.validate()
+    if not is_valid:
+        st.sidebar.error(message)
+    else:
+        st.sidebar.success("Weight configuration is valid")
+    
+    return weights
 def specialty_management():
     """Handle specialty creation and display."""
     st.header("Specialty Details")

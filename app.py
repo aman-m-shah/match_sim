@@ -1,5 +1,9 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
+from datetime import datetime
+import plotly.graph_objects as go
+import plotly.express as px
 from models import ScoreWeights, ExamScores, Applicant
 from simulation import simulate_match
 from components import (
@@ -23,6 +27,8 @@ def initialize_session_state():
         st.session_state.applicant_type = 'MD'
     if 'exam_scores' not in st.session_state:
         st.session_state.exam_scores = ExamScores()
+    if 'simulation_history' not in st.session_state:
+        st.session_state.simulation_history = []
 
 def applicant_setup():
     """Setup applicant details."""
@@ -102,6 +108,147 @@ def create_applicant(rank_list):
         alumni_connection=False  # Could make configurable
     )
 
+def display_analysis():
+    """Display detailed analysis of simulation results."""
+    if not st.session_state.get('last_simulation'):
+        return
+    
+    last_sim = st.session_state.last_simulation
+    probabilities = last_sim['probabilities']
+    detailed_stats = last_sim['detailed_stats']
+    weights = last_sim['weights']
+    
+    # Overall match probability
+    total_match_prob = 1 - probabilities.get('No Match', 0)
+    st.metric("Overall Match Probability", f"{total_match_prob:.1%}")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Match probability by program tier
+        tier_probs = {}
+        for prog_name, prob in probabilities.items():
+            if prog_name != 'No Match':
+                program = st.session_state.programs[prog_name]
+                tier = program.program_tier
+                tier_probs[tier] = tier_probs.get(tier, 0) + prob
+        
+        fig_tier = go.Figure(data=[
+            go.Bar(
+                x=[f"Tier {tier}" for tier in sorted(tier_probs.keys())],
+                y=[tier_probs[tier] for tier in sorted(tier_probs.keys())],
+                text=[f"{tier_probs[tier]:.1%}" for tier in sorted(tier_probs.keys())],
+                textposition='outside'
+            )
+        ])
+        fig_tier.update_layout(
+            title="Match Probability by Program Tier",
+            yaxis_title="Probability",
+            yaxis_tickformat='.1%'
+        )
+        st.plotly_chart(fig_tier)
+    
+    with col2:
+        # Match probability by specialty
+        specialty_probs = {}
+        for prog_name, prob in probabilities.items():
+            if prog_name != 'No Match':
+                program = st.session_state.programs[prog_name]
+                specialty = program.specialty
+                specialty_probs[specialty] = specialty_probs.get(specialty, 0) + prob
+        
+        fig_specialty = go.Figure(data=[
+            go.Bar(
+                x=list(specialty_probs.keys()),
+                y=list(specialty_probs.values()),
+                text=[f"{prob:.1%}" for prob in specialty_probs.values()],
+                textposition='outside'
+            )
+        ])
+        fig_specialty.update_layout(
+            title="Match Probability by Specialty",
+            yaxis_title="Probability",
+            yaxis_tickformat='.1%'
+        )
+        st.plotly_chart(fig_specialty)
+    
+    # Detailed program statistics
+    st.subheader("Program-Specific Analysis")
+    
+    stats_df = pd.DataFrame([
+        {
+            'Program': prog,
+            'Match Rate': f"{stats.get('match_rate', 0):.1%}",
+            'Avg Score': f"{stats.get('avg_score', 0):.2f}",
+            'Score Std Dev': f"{stats.get('std_score', 0):.2f}",
+            'Avg Rank': f"{stats.get('avg_rank', 0):.1f}",
+            'Rank Std Dev': f"{stats.get('std_rank', 0):.1f}",
+            'Number of Matches': stats.get('n_matches', 0)
+        }
+        for prog, stats in detailed_stats.items()
+        if prog != 'No Match'
+    ]).sort_values('Match Rate', ascending=False)
+    
+    st.dataframe(stats_df)
+    
+    # Weight sensitivity
+    st.subheader("Weight Sensitivity Analysis")
+    with st.expander("Weight Configuration Impact", expanded=False):
+        st.write("""
+        This section shows how the current weight configuration affects your match probabilities.
+        Key factors in your results:
+        """)
+        
+        impact_factors = []
+        
+        # Analyze exam score impact
+        if st.session_state.applicant_type == 'MD':
+            normalized_step2 = st.session_state.exam_scores.normalize_scores().get('step2_ck', 0)
+            impact_factors.append({
+                'Factor': 'STEP 2 CK Score',
+                'Weight': weights.step2_weight,
+                'Impact': normalized_step2 * weights.step2_weight
+            })
+        else:
+            normalized_comlex = st.session_state.exam_scores.normalize_scores().get('comlex2', 0)
+            impact_factors.append({
+                'Factor': 'COMLEX Level 2 Score',
+                'Weight': weights.comlex2_weight,
+                'Impact': normalized_comlex * weights.comlex2_weight
+            })
+        
+        # Add other factors
+        impact_factors.extend([
+            {
+                'Factor': 'Interview Performance',
+                'Weight': weights.interview_weight,
+                'Impact': 0.75 * weights.interview_weight  # Using default interview score
+            },
+            {
+                'Factor': 'Letters of Recommendation',
+                'Weight': weights.letters_weight,
+                'Impact': 0.75 * weights.letters_weight  # Using default letter score
+            },
+            {
+                'Factor': 'Research',
+                'Weight': weights.research_weight,
+                'Impact': min(1.0, st.session_state.research_pubs / 5) * weights.research_weight
+            }
+        ])
+        
+        impact_df = pd.DataFrame(impact_factors)
+        
+        # Create impact visualization
+        fig_impact = px.bar(
+            impact_df,
+            x='Factor',
+            y='Impact',
+            text=impact_df['Impact'].apply(lambda x: f'{x:.2f}'),
+            title="Factor Impact Analysis"
+        )
+        fig_impact.update_layout(yaxis_title="Impact Score")
+        st.plotly_chart(fig_impact)
+
 def main():
     st.title("Residency Match Probability Calculator")
     
@@ -110,6 +257,9 @@ def main():
     
     # Sidebar setup
     applicant_setup()
+    
+    # Get score weights from sidebar
+    weights = score_weights_sidebar()
     
     # Settings sidebar
     with st.sidebar:
@@ -121,6 +271,7 @@ def main():
             step=100,
             help="More simulations give more accurate results but take longer to run"
         )
+        st.session_state.n_simulations = n_simulations
         
         # Show national averages
         with st.expander("National Averages"):
@@ -168,6 +319,12 @@ def main():
                     st.error("At least one exam score is required.")
                     return
                 
+                # Validate weights
+                is_valid, message = weights.validate()
+                if not is_valid:
+                    st.error(f"Invalid weight configuration: {message}")
+                    return
+                
                 # Create rank list from programs
                 rank_list = [p.name for p in sorted(
                     st.session_state.programs.values(),
@@ -191,11 +348,12 @@ def main():
                     status_container.text(f"Completed {current} of {total} simulations")
                 
                 try:
-                    # Run simulation
+                    # Run simulation with weights
                     probabilities, detailed_stats = simulate_match(
                         our_applicant,
                         st.session_state.programs,
                         st.session_state.specialties,
+                        weights,
                         n_simulations,
                         progress_callback=update_progress
                     )
@@ -203,6 +361,17 @@ def main():
                     # Clear progress indicators
                     progress_bar.empty()
                     status_container.empty()
+                    
+                    # Store results in session state
+                    st.session_state.last_simulation = {
+                        'probabilities': probabilities,
+                        'detailed_stats': detailed_stats,
+                        'weights': weights,
+                        'timestamp': datetime.now()
+                    }
+                    
+                    # Add to simulation history
+                    st.session_state.simulation_history.append(st.session_state.last_simulation)
                     
                     # Display results
                     display_match_results(probabilities, detailed_stats)
@@ -213,18 +382,8 @@ def main():
                     st.error(f"An error occurred: {str(e)}")
                     raise e
     
-    with tabs[2]:  # Changed from tabs[3] to tabs[2]
-        # Analysis tab
-        st.subheader("Analysis")
-        if not st.session_state.programs:
-            st.warning("Please add programs and run simulation first.")
-            return
-            
-        # Add analysis features here
-        st.write("Analysis features coming soon!")
-        st.write("- Specialty-specific insights")
-        st.write("- Program comparison tools")
-        st.write("- Strategy recommendations")
+    with tabs[2]:
+        display_analysis()
 
 if __name__ == "__main__":
     main()
