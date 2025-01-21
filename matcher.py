@@ -16,52 +16,99 @@ def calculate_applicant_score(
     # Get normalized exam scores
     normalized_scores = applicant.exam_scores.normalize_scores()
     
-    # Base score components
-    score_components = {
-        'interview': applicant.interview_score * weights.interview_weight,
-        'letters': applicant.letter_scores * weights.letters_weight,
-    }
+    # Initialize base score
+    score = 0.0
+    max_score = 0.0  # Track maximum possible score
     
-    # Add exam scores with configurable weights
-    if 'step2_ck' in normalized_scores:
-        score_components['step2'] = normalized_scores['step2_ck'] * weights.step2_weight
-    if 'comlex2' in normalized_scores:
-        score_components['comlex2'] = normalized_scores['comlex2'] * weights.comlex2_weight
+    # Add exam scores - take the better of STEP2 or COMLEX2 if both exist
+    exam_score = 0.0
+    if 'step2_ck' in normalized_scores and 'comlex2' in normalized_scores:
+        # If both exams exist, use the better score
+        exam_score = max(
+            normalized_scores['step2_ck'],
+            normalized_scores['comlex2']
+        )
+        score += exam_score * (weights.step2_weight + weights.comlex2_weight)
+        max_score += weights.step2_weight + weights.comlex2_weight
+    elif 'step2_ck' in normalized_scores:
+        exam_score = normalized_scores['step2_ck']
+        score += exam_score * weights.step2_weight
+        max_score += weights.step2_weight
+    elif 'comlex2' in normalized_scores:
+        exam_score = normalized_scores['comlex2']
+        score += exam_score * weights.comlex2_weight
+        max_score += weights.comlex2_weight
     
-    # Research impact with configurable weight
+    # Add interview score (highly weighted for strong performers)
+    interview_impact = applicant.interview_score * weights.interview_weight
+    if applicant.interview_score > 0.8:  # Bonus for exceptional interviews
+        interview_impact *= 1.2
+    score += interview_impact
+    max_score += weights.interview_weight
+    
+    # Add letter scores
+    letter_impact = applicant.letter_scores * weights.letters_weight
+    if applicant.letter_scores > 0.8:  # Bonus for exceptional letters
+        letter_impact *= 1.2
+    score += letter_impact
+    max_score += weights.letters_weight
+    
+    # Research impact
     research_score = min(1.0, applicant.publications / 5)  # Cap at 5 publications
-    score_components['research'] = research_score * weights.research_weight
+    score += research_score * weights.research_weight
+    max_score += weights.research_weight
     
-    # Program fit bonuses with configurable weights
+    # Normalize base score
+    if max_score > 0:
+        score = score / max_score
+    
+    # Calculate and apply bonuses
+    bonus_score = 0.0
+    
+    # Research alignment bonus (increased for research-focused programs)
     if program.research_focus and applicant.research_focus:
-        score_components['research_alignment'] = weights.research_alignment_bonus
+        research_bonus = weights.research_alignment_bonus
+        if research_score > 0.6:  # Extra bonus for significant research
+            research_bonus *= 1.5
+        bonus_score += research_bonus
+    
+    # Away rotation bonus (slightly higher impact)
     if applicant.away_rotation:
-        score_components['away_rotation'] = weights.away_rotation_bonus
+        bonus_score += weights.away_rotation_bonus * 1.2
+    
+    # Alumni connection bonus
     if applicant.alumni_connection:
-        score_components['alumni'] = weights.alumni_bonus
+        bonus_score += weights.alumni_bonus
+    
+    # Geographic preference bonus
     if program.geographic_preference:
-        score_components['geographic'] = weights.geographic_bonus
+        bonus_score += weights.geographic_bonus
     
-    # Calculate base final score
-    base_final_score = sum(score_components.values())
+    # Cap total bonus at 40% of base score
+    max_bonus = score * 0.4
+    bonus_score = min(max_bonus, bonus_score)
     
-    # Apply configurable program tier adjustment
+    # Add capped bonus to score
+    score = min(1.0, score + bonus_score)
+    
+    # Apply program tier adjustment (with slightly reduced impact)
     tier_factors = {
         1: weights.tier_1_factor,
-        2: weights.tier_2_factor,
-        3: weights.tier_3_factor
+        2: weights.tier_2_factor * 1.1,  # Boost tier 2 slightly
+        3: weights.tier_3_factor * 1.2   # Boost tier 3 slightly
     }
-    base_final_score *= tier_factors[program.program_tier]
+    score *= tier_factors[program.program_tier]
     
-    # Add configurable random variance
-    random_variance = random.uniform(
-        -weights.score_random_factor,
-        weights.score_random_factor
-    ) * base_final_score
-    final_score = base_final_score + random_variance
+    # Add smaller random variance for high scores
+    if score > 0:
+        variance_factor = weights.score_random_factor
+        if score > 0.8:  # Reduce randomness for high scores
+            variance_factor *= 0.5
+        random_variance = random.uniform(-variance_factor, variance_factor) * score
+        score = score + random_variance
     
     # Ensure final score remains between 0 and 1
-    return min(1.0, max(0.0, final_score))
+    return min(1.0, max(0.0, score))
 
 def generate_rank_order(
     applicants: Dict[str, Applicant],
@@ -80,24 +127,25 @@ def generate_rank_order(
         )
         scores.append((app_id, score))
     
-    # Sort by score with configurable random factor
+    # Sort by score with reduced randomness for high scores
     ranked_applicants = []
     for app_id, score in scores:
         if score > 0:  # Skip zero scores
-            random_adj = random.uniform(
-                -weights.rank_random_factor,
-                weights.rank_random_factor
-            ) * score
+            variance_factor = weights.rank_random_factor
+            if score > 0.8:  # Reduce randomness for high scores
+                variance_factor *= 0.5
+            random_adj = random.uniform(-variance_factor, variance_factor) * score
             ranked_applicants.append((app_id, score + random_adj))
     
+    # Sort by final score
     return [
-        app_id for app_id, _ in
+        app_id for app_id, _ in 
         sorted(ranked_applicants, key=lambda x: x[1], reverse=True)
     ]
 
 def run_matching_round(
     applicant_preferences: Dict[str, List[str]],
-    program_preferences: Dict[str, List[str]],
+    program_preferences: Dict[str, Dict[str, List[str]]],
     program_capacities: Dict[str, int],
     weights: ScoreWeights
 ) -> MatchResult:
@@ -128,15 +176,15 @@ def run_matching_round(
                 for app in current_matches + [applicant]
             }
             
-            # Add configurable random variation to rankings
+            # Add reduced random variation for highly ranked applicants
             sorted_applicants = sorted(
                 rankings.keys(),
                 key=lambda x: (
-                    rankings[x] +
+                    rankings[x] + 
                     random.uniform(
                         -weights.match_random_factor,
                         weights.match_random_factor
-                    ) * len(ranked_applicants)
+                    ) * min(5, rankings[x])  # Scale randomness by rank position
                 )
             )
             
@@ -149,17 +197,6 @@ def run_matching_round(
                 unmatched.add(rejected)
             else:
                 unmatched.add(applicant)
-    
-    # Create match result
-    applicant_matches = {}
-    for prog, matched_apps in matches.items():
-        for app in matched_apps:
-            applicant_matches[app] = prog
-            
-    unfilled = {
-        prog: capacity - len(matches[prog])
-        for prog, capacity in program_capacities.items()
-    }
     
     return MatchResult(
         applicant_matches=applicant_matches,
