@@ -1,6 +1,6 @@
 from typing import Dict, List, Tuple
 import random
-from models import Applicant, Program, Specialty, MatchResult
+from models import Applicant, Program, Specialty, MatchResult, ScoreWeights
 
 def calculate_applicant_score(
     applicant: Applicant,
