@@ -2,10 +2,10 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from datetime import datetime
+import multiprocessing as mp
 import plotly.graph_objects as go
-import plotly.express as px
 from models import ScoreWeights, ExamScores, Applicant
-from simulation import simulate_match
+from parallel_simulation import parallel_simulate_match  # New import
 from components import (
     score_weights_sidebar,
     specialty_management,
@@ -349,7 +349,7 @@ def main():
                 
                 try:
                     # Run simulation with weights
-                    probabilities, detailed_stats = simulate_match(
+                    probabilities, detailed_stats = parallel_simulate_match(
                         our_applicant,
                         st.session_state.programs,
                         st.session_state.specialties,
