@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import multiprocessing as mp
+import plotly.express as px
 import plotly.graph_objects as go
 from models import ScoreWeights, ExamScores, Applicant
 from parallel_simulation import parallel_simulate_match  # New import
@@ -248,6 +249,43 @@ def display_analysis():
         )
         fig_impact.update_layout(yaxis_title="Impact Score")
         st.plotly_chart(fig_impact)
+        
+def display_analysis():
+    if 'last_results' not in st.session_state:
+        st.warning("Please run simulation first")
+        return
+        
+    probabilities = st.session_state.last_results.get('probabilities', {})
+    detailed_stats = st.session_state.last_results.get('detailed_stats', {})
+    
+    # Create DataFrame for plotting
+    df = pd.DataFrame([
+        {
+            'Program': prog,
+            'Probability': prob,
+            'Average Score': detailed_stats[prog].get('avg_score', 0) if prog != 'No Match' else 0
+        }
+        for prog, prob in probabilities.items()
+    ])
+    
+    # Create plots
+    fig = go.Figure(data=[
+        go.Bar(
+            x=df['Program'],
+            y=df['Probability'],
+            text=df['Probability'].apply(lambda x: f'{x:.1%}'),
+            textposition='outside'
+        )
+    ])
+    
+    fig.update_layout(
+        title="Match Probability by Program",
+        xaxis_title="Program",
+        yaxis_title="Probability",
+        yaxis_tickformat='.1%'
+    )
+    
+    st.plotly_chart(fig)
 
 def main():
     st.title("Residency Match Probability Calculator")
@@ -369,6 +407,8 @@ def main():
                         'weights': weights,
                         'timestamp': datetime.now()
                     }
+                    
+                    
                     
                     # Add to simulation history
                     st.session_state.simulation_history.append(st.session_state.last_simulation)
