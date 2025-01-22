@@ -302,7 +302,7 @@ def main():
         if st.button("Clear All"):
             st.session_state.programs = {}
             st.session_state.specialties = {}
-            st.experimental_rerun()
+            st.rerun()
     
     with tabs[1]:
         if not st.session_state.programs:
